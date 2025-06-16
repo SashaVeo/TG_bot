@@ -109,12 +109,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logging.error(f"OpenAI ошибка в chat: {e}")
         await update.message.reply_text("Ошибка при ответе от GPT.", reply_markup=build_keyboard())
 
+from telegram.ext import DictPersistence
+
 # === Запуск ===
 if __name__ == "__main__":
     print("🤖 Бот запускается...")
 
-    defaults = Defaults(parse_mode=None)  # Можно использовать HTML, Markdown
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).defaults(defaults).build()
+    defaults = Defaults(parse_mode=None)
+    persistence = DictPersistence()  # Добавляем хранилище
+
+    app = ApplicationBuilder()\
+        .token(TELEGRAM_BOT_TOKEN)\
+        .defaults(defaults)\
+        .persistence(persistence)\
+        .build()
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))

@@ -36,7 +36,7 @@ def handle_response(chat_id: Union[int, str], text: str) -> str:
 
 # Команды
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("👋 Привет! Я бот на GPT-4o. Напиши что-нибудь, быдло.")
+    await update.message.reply_text("👋 Привет! Я бот на GPT-4o. Напиши что-нибудь, гавнюк.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Просто пиши — я отвечаю.")

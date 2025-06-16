@@ -1,6 +1,7 @@
 import logging
 import openai
 import os
+import base64
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (ApplicationBuilder, CommandHandler,
                           ContextTypes, MessageHandler,

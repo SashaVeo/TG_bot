@@ -1,23 +1,25 @@
-import os
 import logging
+import os
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler, CallbackQueryHandler,
-    ContextTypes, filters
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    ContextTypes, CallbackQueryHandler, filters
 )
-from openai import OpenAI
+import openai
 
 # Ключи из переменных среды
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-client = OpenAI(api_key=OPENAI_API_KEY)
+openai.api_key = OPENAI_API_KEY
 
-# Логгирование
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+# Логирование
+logging.basicConfig(
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
+)
 
 # Истории чатов
 chat_histories = {}
-image_request_flags = {}
 
 def get_chat_history(chat_id):
     return chat_histories.setdefault(chat_id, [])
@@ -28,32 +30,32 @@ def build_keyboard():
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "😊 Привет! Я бот с GPT-4o. Напиши что-то или выбери кнопку.",
+        "😊 Привет! Я бот с GPT-4o. Напиши что-нибудь или нажми кнопку 👇",
         reply_markup=build_keyboard()
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Напиши вопрос или нажми кнопку")
+    await update.message.reply_text("Напиши вопрос или нажми кнопку ниже.")
 
 async def handle_button(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
+
     if query.data == "make_image":
-        await query.message.reply_text("🖋️ Напиши описание изображения")
-        image_request_flags[query.message.chat.id] = True
+        context.user_data["awaiting_image"] = True
+        await query.message.reply_text("🖋 Напиши описание, и я сгенерирую картинку!")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     text = update.message.text
-    history = get_chat_history(chat_id)
 
-    # Если ждем описание для изображения
-    if image_request_flags.get(chat_id):
-        image_request_flags[chat_id] = False
-        await update.message.reply_text("🎨 Создаю изображение...")
-        image_response = client.images.generate(
-            model="dall-e-3",
+    if context.user_data.get("awaiting_image"):
+        context.user_data["awaiting_image"] = False
+        await update.message.reply_text("🎨 Генерирую изображение...")
+
+        image_response = openai.images.generate(
             prompt=text,
+            model="dall-e-3",
             n=1,
             size="1024x1024"
         )
@@ -61,24 +63,23 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_photo(photo=image_url)
         return
 
-    # Обычный текст
+    history = get_chat_history(chat_id)
     history.append({"role": "user", "content": text})
-    messages = [{
-        "role": "system",
-        "content": "Ты полноценный GPT-4o. Отвечаешь подробно, ссылаешься на контекст."
-    }] + history
 
-    response = client.chat.completions.create(
+    messages = [{"role": "system", "content": "Ты умный помощник. Отвечай подробно и точно."}] + history
+
+    response = openai.chat.completions.create(
         model="gpt-4o",
         messages=messages,
         temperature=0.8,
         max_tokens=1000
     )
+
     bot_reply = response.choices[0].message.content
     history.append({"role": "assistant", "content": bot_reply})
     await update.message.reply_text(bot_reply, reply_markup=build_keyboard())
 
-# === Запуск ===
+# Запуск бота
 if __name__ == "__main__":
     app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))

@@ -6,6 +6,9 @@ from telegram.ext import (
     ContextTypes, CallbackQueryHandler, filters
 )
 import openai
+from telegram.ext import CallbackQueryHandler
+
+app.add_handler(CallbackQueryHandler(handle_button_click))
 
 # Ключи из переменных среды
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -28,6 +31,7 @@ def get_chat_history(chat_id):
 def build_keyboard():
     keyboard = [[InlineKeyboardButton("🌍 Сделать изображение", callback_data="make_image")]]
     return InlineKeyboardMarkup(keyboard)
+    
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
@@ -73,6 +77,32 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     bot_reply = response.choices[0].message.content
     history.append({"role": "assistant", "content": bot_reply})
     await update.message.reply_text(bot_reply, reply_markup=build_keyboard())
+    async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user_input = update.message.text
+
+    # если ждем описание — генерируем изображение
+    if context.user_data.get("awaiting_image_description"):
+        context.user_data["awaiting_image_description"] = False
+        await update.message.reply_text("🎨 Создаю изображение, подожди...")
+        
+        # вызов DALL·E или image API
+        response = openai.Image.create(
+            prompt=user_input,
+            n=1,
+            size="512x512"
+        )
+        image_url = response['data'][0]['url']
+        await update.message.reply_photo(image_url)
+        return
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+keyboard = [
+    [InlineKeyboardButton("🖼 Сделать изображение", callback_data="generate_image")]
+]
+reply_markup = InlineKeyboardMarkup(keyboard)
+
+await update.message.reply_text("Выбери действие:", reply_markup=reply_markup)
 
 # === Запуск ===
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
+openai
+python-telegram-bot==20.7
 pydub
 ffmpeg-python
-openai
-python-telegram-bot==20.3
+requests

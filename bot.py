@@ -3,25 +3,34 @@ import os
 import asyncio
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    ContextTypes, filters, Defaults
+    ApplicationBuilder,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
 )
+from telegram.constants import ChatAction
 import openai
 import aiohttp
 import subprocess
 
 # === Переменные окружения ===
+# Убедитесь, что вы установили эти переменные в вашей среде
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 if not TELEGRAM_BOT_TOKEN or not OPENAI_API_KEY:
-    raise EnvironmentError("Не установлены TELEGRAM_BOT_TOKEN или OPENAI_API_KEY")
+    raise EnvironmentError("Не установлены переменные окружения TELEGRAM_BOT_TOKEN или OPENAI_API_KEY")
 
-openai.api_key = OPENAI_API_KEY
+# === Инициализация клиента OpenAI (новый синтаксис) ===
+# Это необходимо для работы с последними версиями библиотеки openai
+client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
-# === URL для загрузки бинарников ===
+# === Пути к бинарникам ===
+BIN_DIR = "./bin"
+FFMPEG_PATH = os.path.join(BIN_DIR, "ffmpeg")
 FFMPEG_URL = "https://github.com/SashaVeo/TG_bot/releases/download/v1.0/ffmpeg"
-FFPROBE_URL = "https://github.com/SashaVeo/TG_bot/releases/download/v1.0/ffprobe"
+FFPROBE_URL = "https://github.com/SashaVeo/TG_bot/releases/download/v1.0/ffprobe" # Оставлено для полноты картины
 
 # === Логгирование ===
 logging.basicConfig(
@@ -31,159 +40,232 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # === Истории чатов ===
+# Словарь для хранения историй переписки для разных режимов
 chat_histories = {
     "default": {},
     "psychologist": {},
     "astrologer": {}
 }
-MAX_HISTORY_PAIRS = 10
+MAX_HISTORY_PAIRS = 10 # Максимальное количество пар "вопрос-ответ" в истории
 
 def get_chat_history(chat_id, mode):
+    """Получает историю чата для данного пользователя и режима."""
     history_store = chat_histories.get(mode, {})
     return history_store.setdefault(chat_id, [])
 
 def trim_chat_history(history):
-    return history[-(MAX_HISTORY_PAIRS * 2):] if len(history) > MAX_HISTORY_PAIRS * 2 else history
+    """Обрезает историю чата до максимального размера, чтобы не превышать лимиты токенов."""
+    if len(history) > MAX_HISTORY_PAIRS * 2:
+        return history[-(MAX_HISTORY_PAIRS * 2):]
+    return history
 
 def build_keyboard():
+    """Создает и возвращает клавиатуру с основными режимами."""
     keyboard = [
         [KeyboardButton("🌍 Изображение")],
-        [KeyboardButton("💬 Психолог")],
-        [KeyboardButton("🔮 Астролог")],
-        [KeyboardButton("🔙 Назад")]
+        [KeyboardButton("💬 Психолог"), KeyboardButton("🔮 Астролог")],
+        [KeyboardButton("🔙 Назад в главное меню")]
     ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, one_time_keyboard=False)
 
 # === Команды ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обработчик команды /start. Приветствует пользователя и показывает клавиатуру."""
     await update.message.reply_text(
-        "😊 Привет! Я бот с GPT-4o. Выбери действие:",
+        "😊 Привет! Я многофункциональный бот с GPT-4o.\n\n"
+        "Выберите один из режимов в меню ниже. Вы можете отправлять мне текстовые и голосовые сообщения.",
         reply_markup=build_keyboard()
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Выбери действие из меню.", reply_markup=build_keyboard())
+    """Обработчик команды /help. Объясняет возможности бота."""
+    await update.message.reply_text(
+        "Я могу работать в нескольких режимах:\n\n"
+        "🌍 **Изображение** - создам картинку по вашему текстовому описанию.\n"
+        "💬 **Психолог** - выслушаю и поддержу вас в трудную минуту.\n"
+        "🔮 **Астролог** - дам совет, основываясь на звездах.\n\n"
+        "Просто выберите режим из меню. Также я умею расшифровывать голосовые сообщения!",
+        reply_markup=build_keyboard()
+    )
 
 # === Обработчик аудио ===
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    file = await update.message.voice.get_file()
-    ogg_path = f"voice_{update.message.message_id}.ogg"
-    mp3_path = f"voice_{update.message.message_id}.mp3"
-
-    await file.download_to_drive(ogg_path)
+    """Обрабатывает голосовые сообщения: скачивает, конвертирует в MP3 и распознает текст."""
+    ogg_path = None
+    mp3_path = None
     try:
-        subprocess.run(["./bin/ffmpeg", "-i", ogg_path, mp3_path], check=True)
+        file_id = update.message.voice.file_id
+        voice_file = await context.bot.get_file(file_id)
+        
+        ogg_path = f"voice_{file_id}.ogg"
+        mp3_path = f"voice_{file_id}.mp3"
+
+        await voice_file.download_to_drive(ogg_path)
+
+        # Показываем пользователю, что мы работаем с его сообщением
+        await update.message.chat.send_action(action=ChatAction.TYPING)
+
+        # Асинхронный вызов ffmpeg для конвертации
+        process = await asyncio.create_subprocess_exec(
+            FFMPEG_PATH, "-i", ogg_path, "-y", mp3_path,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE
+        )
+        stdout, stderr = await process.communicate()
+
+        if process.returncode != 0:
+            logger.error(f"Ошибка конвертации ffmpeg: {stderr.decode()}")
+            await update.message.reply_text("❌ Не удалось обработать ваше голосовое сообщение.")
+            return
+
+        # Распознавание текста с помощью OpenAI Whisper
         with open(mp3_path, "rb") as audio_file:
-            transcript = openai.Audio.transcribe("whisper-1", audio_file)
-            update.message.text = transcript["text"]
-            await handle_message(update, context)
+            transcript = client.audio.transcriptions.create(
+              model="whisper-1",
+              file=audio_file
+            )
+        
+        recognized_text = transcript.text
+        logger.info(f"Распознанный текст: '{recognized_text}'")
+        
+        # Создаем "фейковое" текстовое сообщение и передаем его в основной обработчик
+        update.message.text = recognized_text
+        await handle_message(update, context)
+
     except Exception as e:
-        await update.message.reply_text("❌ Ошибка при обработке аудио")
-        logger.error(f"Ошибка при конвертации: {e}")
+        await update.message.reply_text("❌ Произошла ошибка при обработке аудио.")
+        logger.error(f"Ошибка в handle_voice: {e}")
     finally:
-        if os.path.exists(ogg_path):
+        # Очистка временных файлов
+        if ogg_path and os.path.exists(ogg_path):
             os.remove(ogg_path)
-        if os.path.exists(mp3_path):
+        if mp3_path and os.path.exists(mp3_path):
             os.remove(mp3_path)
 
 # === Обработчик текстовых сообщений ===
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Обрабатывает текстовые сообщения и управляет режимами работы бота."""
     chat_id = update.effective_chat.id
-    user_id = update.effective_user.id
     text = update.message.text.strip()
 
     mode = context.user_data.get("mode", "default")
 
-    if text == "🔙 Назад":
+    # === Навигация по меню ===
+    if text == "🔙 Назад в главное меню":
         context.user_data["mode"] = "default"
-        await update.message.reply_text("Главное меню:", reply_markup=build_keyboard())
+        await update.message.reply_text("Вы вернулись в главное меню. Чем могу помочь?", reply_markup=build_keyboard())
         return
 
     if text == "🌍 Изображение":
         context.user_data["mode"] = "image"
-        await update.message.reply_text("🖋 Напиши описание изображения, которое хочешь создать:")
+        await update.message.reply_text("🖋 Отправьте мне текстовое описание, и я создам изображение.")
         return
 
     if text == "💬 Психолог":
         context.user_data["mode"] = "psychologist"
-        await update.message.reply_text("🧠 Психолог слушает тебя. Расскажи, что тревожит.")
+        await update.message.reply_text("🧠 Я вас слушаю. Расскажите, что вас беспокоит. Можете отправить текстовое или голосовое сообщение.")
         return
 
     if text == "🔮 Астролог":
         context.user_data["mode"] = "astrologer"
-        await update.message.reply_text("🔮 Я астролог. Введи дату рождения, время и город.")
+        await update.message.reply_text("✨ Я ваш личный астролог. Задайте свой вопрос или опишите ситуацию.")
         return
 
+    # === Логика для каждого режима ===
     if mode == "image":
-        context.user_data["mode"] = "default"
-        await update.message.reply_text("🎨 Генерирую изображение...")
+        context.user_data["mode"] = "default" # Возвращаемся в обычный режим после генерации
+        await update.message.reply_text("🎨 Создаю изображение... Это может занять до минуты.", reply_markup=build_keyboard())
+        await update.message.chat.send_action(action=ChatAction.UPLOAD_PHOTO)
         try:
-            response = openai.images.generate(
-                prompt=text,
+            # Обновленный вызов API для генерации изображений
+            response = client.images.generate(
                 model="dall-e-3",
+                prompt=text,
                 n=1,
-                size="1024x1024"
+                size="1024x1024",
+                quality="standard"
             )
             image_url = response.data[0].url
-            await update.message.reply_photo(photo=image_url)
+            await update.message.reply_photo(photo=image_url, caption="Ваше изображение готово!")
+        except openai.BadRequestError as e:
+            logger.error(f"Ошибка генерации изображения (BadRequestError): {e}")
+            await update.message.reply_text("К сожалению, я не могу создать изображение по этому запросу. Возможно, он нарушает политику безопасности. Попробуйте переформулировать.")
         except Exception as e:
-            logger.error(f"Ошибка при генерации изображения: {e}")
-            await update.message.reply_text("Ошибка при генерации изображения.")
+            logger.error(f"Неизвестная ошибка при генерации изображения: {e}")
+            await update.message.reply_text("Произошла непредвиденная ошибка при создании изображения. Пожалуйста, попробуйте позже.")
         return
 
+    # === Логика для текстовых режимов (Психолог, Астролог, Default) ===
     history = get_chat_history(chat_id, mode)
     history.append({"role": "user", "content": text})
-    history = trim_chat_history(history)
+    
+    system_prompts = {
+        "default": "Ты — дружелюбный и полезный ассистент GPT-4o. Твои ответы должны быть четкими, структурированными и полезными.",
+        "psychologist": "Ты — эмпатичный и профессиональный психолог. Твоя задача — мягко и поддерживающе общаться с пользователем. Не давай прямых советов, а помогай человеку самому найти ответы. Используй открытые вопросы. Проявляй сочувствие и понимание.",
+        "astrologer": "Ты — опытный астролог с современным подходом. Используй астрологическую терминологию, но объясняй ее простым языком. Твои прогнозы должны быть позитивными и вдохновляющими, а не фаталистичными."
+    }
+    system_prompt = system_prompts.get(mode, system_prompts["default"])
 
-    system_prompt = {
-        "default": "Ты умный помощник. Отвечай подробно и понятно.",
-        "psychologist": "Ты профессиональный психолог. Говори мягко, поддерживающе.",
-        "astrologer": "Ты экспертный астролог. Используй астрологические знания, советы и термины."
-    }.get(mode, "Ты умный помощник.")
-
-    messages = [{"role": "system", "content": system_prompt}] + history
+    messages = [{"role": "system", "content": system_prompt}] + trim_chat_history(history)
 
     try:
-        response = openai.chat.completions.create(
+        await update.message.chat.send_action(action=ChatAction.TYPING)
+        # Обновленный вызов API для чата
+        response = client.chat.completions.create(
             model="gpt-4o",
             messages=messages,
-            temperature=0.8,
-            max_tokens=1000
+            temperature=0.7,
+            max_tokens=1500
         )
         bot_reply = response.choices[0].message.content
+        
         history.append({"role": "assistant", "content": bot_reply})
-        chat_histories[mode][chat_id] = trim_chat_history(history)
+        chat_histories[mode][chat_id] = history
 
-        await update.message.reply_text(bot_reply, reply_markup=build_keyboard())
+        await update.message.reply_text(bot_reply)
+
     except Exception as e:
-        logger.error(f"Ошибка OpenAI: {e}")
-        await update.message.reply_text("Произошла ошибка. Попробуй ещё раз позже.")
+        logger.error(f"Ошибка ответа OpenAI: {e}")
+        await update.message.reply_text("К сожалению, произошла ошибка. Пожалуйста, попробуйте еще раз позже.")
 
-# === Инициализация приложения ===
+# === Инициализация и запуск бота ===
 async def ensure_ffmpeg():
-    os.makedirs("./bin", exist_ok=True)
-    for name, url in {"ffmpeg": FFMPEG_URL, "ffprobe": FFPROBE_URL}.items():
-        path = f"./bin/{name}"
-        if not os.path.isfile(path):
-            print(f"⬇️  Скачиваем {path}...")
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url) as resp:
-                    with open(path, "wb") as f:
+    """Проверяет наличие ffmpeg и скачивает его, если он отсутствует."""
+    os.makedirs(BIN_DIR, exist_ok=True)
+    
+    if not os.path.isfile(FFMPEG_PATH):
+        logger.info(f"⬇️ FFMPEG не найден. Скачиваю...")
+        async with aiohttp.ClientSession() as session:
+            async with session.get(FFMPEG_URL) as resp:
+                if resp.status == 200:
+                    with open(FFMPEG_PATH, "wb") as f:
                         f.write(await resp.read())
-        os.chmod(path, 0o755)
-        print(f"✅ {path} готов к использованию")
+                    os.chmod(FFMPEG_PATH, 0o755) # Даем права на исполнение
+                    logger.info(f"✅ FFMPEG успешно скачан в {FFMPEG_PATH}")
+                else:
+                    logger.error(f"Не удалось скачать FFMPEG. Статус код: {resp.status}")
+                    raise RuntimeError("Не удалось скачать ffmpeg")
+    else:
+        # Убедимся, что у файла есть права на исполнение, даже если он уже существует
+        os.chmod(FFMPEG_PATH, 0o755)
+        logger.info(f"✅ FFMPEG уже на месте: {FFMPEG_PATH}")
 
 if __name__ == "__main__":
-    print("🤖 Бот запускается...")
+    # Сначала убедимся, что все зависимости на месте
     asyncio.run(ensure_ffmpeg())
 
-    defaults = Defaults(parse_mode=None)
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).defaults(defaults).build()
+    print("🤖 Бот запускается...")
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    # Создаем и конфигурируем приложение
+    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
-    logging.info("Бот запущен и слушает события.")
-    app.run_polling()
+    # Добавляем обработчики команд и сообщений
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(MessageHandler(filters.VOICE, handle_voice))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    logging.info("Бот успешно запущен и готов к работе.")
+    
+    # Запускаем бота в режиме опроса (polling)
+    application.run_polling()

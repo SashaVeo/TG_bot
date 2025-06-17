@@ -11,24 +11,22 @@ from telegram.ext import (
 )
 from telegram.constants import ChatAction
 import openai
-import aiohttp
+import aiohttp # aiohttp оставим, он может пригодиться для других целей
 import subprocess
 
 # === Переменные окружения ===
-# Убедитесь, что вы установили эти переменные в вашей среде
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 if not TELEGRAM_BOT_TOKEN or not OPENAI_API_KEY:
     raise EnvironmentError("Не установлены переменные окружения TELEGRAM_BOT_TOKEN или OPENAI_API_KEY")
 
-# === Инициализация клиента OpenAI (новый синтаксис) ===
+# === Инициализация клиента OpenAI ===
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
 
-# === Пути к бинарникам ===
-BIN_DIR = "./bin"
-FFMPEG_PATH = os.path.join(BIN_DIR, "ffmpeg")
-FFMPEG_URL = "https://github.com/SashaVeo/TG_bot/releases/download/v1.0/ffmpeg"
+# === Путь к FFMPEG ===
+# Теперь ffmpeg будет установлен системно, поэтому достаточно просто его имени
+FFMPEG_PATH = "ffmpeg"
 
 # === Логгирование ===
 logging.basicConfig(
@@ -46,18 +44,15 @@ chat_histories = {
 MAX_HISTORY_PAIRS = 10
 
 def get_chat_history(chat_id, mode):
-    """Получает историю чата для данного пользователя и режима."""
     history_store = chat_histories.get(mode, {})
     return history_store.setdefault(chat_id, [])
 
 def trim_chat_history(history):
-    """Обрезает историю чата до максимального размера."""
     if len(history) > MAX_HISTORY_PAIRS * 2:
         return history[-(MAX_HISTORY_PAIRS * 2):]
     return history
 
 def build_keyboard():
-    """Создает и возвращает клавиатуру с основными режимами."""
     keyboard = [
         [KeyboardButton("🌍 Изображение")],
         [KeyboardButton("💬 Психолог"), KeyboardButton("🔮 Астролог")],
@@ -67,7 +62,6 @@ def build_keyboard():
 
 # === Команды ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /start."""
     await update.message.reply_text(
         "😊 Привет! Я многофункциональный бот с GPT-4o.\n\n"
         "Выберите один из режимов в меню ниже. Вы можете отправлять мне текстовые и голосовые сообщения.",
@@ -75,7 +69,6 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обработчик команды /help."""
     await update.message.reply_text(
         "Я могу работать в нескольких режимах:\n\n"
         "🌍 **Изображение** - создам картинку по вашему текстовому описанию.\n"
@@ -87,7 +80,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # === Обработчик аудио ===
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает голосовые сообщения."""
     ogg_path = None
     mp3_path = None
     try:
@@ -135,7 +127,6 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # === Обработчик текстовых сообщений ===
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает текстовые сообщения и управляет режимами работы."""
     chat_id = update.effective_chat.id
     text = update.message.text.strip()
 
@@ -215,31 +206,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("К сожалению, произошла ошибка. Пожалуйста, попробуйте еще раз позже.")
 
 # === Инициализация и запуск бота ===
-async def ensure_ffmpeg():
-    """Проверяет наличие ffmpeg и скачивает его, если он отсутствует."""
-    os.makedirs(BIN_DIR, exist_ok=True)
-    
-    if not os.path.isfile(FFMPEG_PATH):
-        logger.info(f"⬇️ FFMPEG не найден. Скачиваю...")
-        async with aiohttp.ClientSession() as session:
-            async with session.get(FFMPEG_URL) as resp:
-                if resp.status == 200:
-                    with open(FFMPEG_PATH, "wb") as f:
-                        f.write(await resp.read())
-                    os.chmod(FFMPEG_PATH, 0o755)
-                    logger.info(f"✅ FFMPEG успешно скачан в {FFMPEG_PATH}")
-                else:
-                    logger.error(f"Не удалось скачать FFMPEG. Статус код: {resp.status}")
-                    raise RuntimeError("Не удалось скачать ffmpeg")
-    else:
-        os.chmod(FFMPEG_PATH, 0o755)
-        logger.info(f"✅ FFMPEG уже на месте: {FFMPEG_PATH}")
-
-
 async def main() -> None:
     """Основная асинхронная функция для настройки и запуска бота."""
-    await ensure_ffmpeg()
-
     application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
@@ -251,7 +219,6 @@ async def main() -> None:
         logger.info("Бот запускается...")
         print("🤖 Бот запускается...")
         
-        # Асинхронный запуск
         await application.initialize()
         await application.start()
         await application.updater.start_polling()
@@ -259,7 +226,6 @@ async def main() -> None:
         logger.info("Бот успешно запущен и готов к работе.")
         print("✅ Бот успешно запущен и готов к работе.")
         
-        # Бесконечный цикл для поддержания работы бота
         while True:
             await asyncio.sleep(3600)
             

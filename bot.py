@@ -1,5 +1,6 @@
 import logging
 import os
+import tempfile
 import urllib.request
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -9,41 +10,35 @@ from telegram.ext import (
 import openai
 from openai import OpenAIError
 
-# === Настройка переменных среды ===
+# === Переменные окружения ===
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+
 if not TELEGRAM_BOT_TOKEN or not OPENAI_API_KEY:
     raise EnvironmentError("Не установлены TELEGRAM_BOT_TOKEN или OPENAI_API_KEY")
+
 openai.api_key = OPENAI_API_KEY
-
-# === Загрузка ffmpeg и ffprobe из GitHub Release ===
-def download_ffmpeg_binaries():
-    os.makedirs("bin", exist_ok=True)
-    BINARIES = {
-        FFMPEG_URL = "https://github.com/SashaVeo/TG_bot/releases/download/v1.0/ffmpeg"
-        FFPROBE_URL = "https://github.com/SashaVeo/TG_bot/releases/download/v1.0/ffprobe"
-    }
-    for name, url in BINARIES.items():
-        path = os.path.join("bin", name)
-        if not os.path.exists(path):
-            print(f"⬇️  Downloading {name}...")
-            urllib.request.urlretrieve(url, path)
-            os.chmod(path, 0o755)
-    os.environ["PATH"] = os.path.abspath("bin") + os.pathsep + os.environ["PATH"]
-
-download_ffmpeg_binaries()
 
 # === Логгирование ===
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    level=logging.INFO
 )
 
+# === URL бинарников ===
+FFMPEG_URL = "https://github.com/SashaVeo/TG_bot/releases/download/v1.0/ffmpeg"
+FFPROBE_URL = "https://github.com/SashaVeo/TG_bot/releases/download/v1.0/ffprobe"
+
 # === Истории чатов ===
-chat_histories = {"default": {}, "psychologist": {}, "astrologer": {}}
+chat_histories = {
+    "default": {},
+    "psychologist": {},
+    "astrologer": {}
+}
 MAX_HISTORY_PAIRS = 10
 
 def get_chat_history(chat_id, mode):
-    return chat_histories.setdefault(mode, {}).setdefault(chat_id, [])
+    return chat_histories.get(mode, {}).setdefault(chat_id, [])
 
 def trim_chat_history(history):
     return history[-(MAX_HISTORY_PAIRS * 2):] if len(history) > MAX_HISTORY_PAIRS * 2 else history
@@ -53,13 +48,16 @@ def build_keyboard():
         [KeyboardButton("🌍 Изображение")],
         [KeyboardButton("💬 Психолог")],
         [KeyboardButton("🔮 Астролог")],
-        [KeyboardButton("🔙 Назад")]
+        [KeyboardButton("↩ Назад")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # === Команды ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("😊 Привет! Я бот с GPT-4o. Выбери действие:", reply_markup=build_keyboard())
+    await update.message.reply_text(
+        "😊 Привет! Я бот с GPT-4o. Выбери действие:",
+        reply_markup=build_keyboard()
+    )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Выбери действие из меню.", reply_markup=build_keyboard())
@@ -67,28 +65,31 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # === Обработчик сообщений ===
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    user_id = update.effective_user.id
     text = update.message.text.strip()
-    mode = context.user_data.get("mode", "default")
 
+    # Переход в режимы
     if text == "🌍 Изображение":
         context.user_data["mode"] = "image"
         await update.message.reply_text("🖋 Напиши описание изображения, которое хочешь создать:")
         return
+
     if text == "💬 Психолог":
         context.user_data["mode"] = "psychologist"
         await update.message.reply_text("🧠 Психолог слушает тебя. Расскажи, что тревожит.")
         return
+
     if text == "🔮 Астролог":
         context.user_data["mode"] = "astrologer"
         await update.message.reply_text("🔮 Я астролог. Введи дату рождения, время и город.")
         return
-    if text == "🔙 Назад":
+
+    if text == "↩ Назад":
         context.user_data["mode"] = "default"
-        await update.message.reply_text("↩️ Вернулись в главное меню.", reply_markup=build_keyboard())
+        await update.message.reply_text("🔙 Возвращаюсь в главное меню.", reply_markup=build_keyboard())
         return
 
-    if mode == "image":
+    # Режим генерации изображения
+    if context.user_data.get("mode") == "image":
         context.user_data["mode"] = "default"
         await update.message.reply_text("🎨 Генерирую изображение...")
         try:
@@ -99,16 +100,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 size="1024x1024"
             )
             image_url = image_response.data[0].url
-            await update.message.reply_photo(photo=image_url)
+            await update.message.reply_photo(photo=image_url, reply_markup=build_keyboard())
         except OpenAIError as e:
             logging.error(f"Ошибка OpenAI при генерации изображения: {e}")
-            await update.message.reply_text("Ошибка при генерации изображения.")
+            await update.message.reply_text("Ошибка при генерации изображения.", reply_markup=build_keyboard())
         return
 
-    # === Чат-режим ===
+    # === Логика чата ===
+    mode = context.user_data.get("mode", "default")
     history = get_chat_history(chat_id, mode)
     history.append({"role": "user", "content": text})
     history = trim_chat_history(history)
+    chat_histories[mode][chat_id] = history
 
     system_prompt = {
         "default": "Ты умный помощник. Отвечай подробно и понятно.",
@@ -128,7 +131,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         bot_reply = response.choices[0].message.content
         history.append({"role": "assistant", "content": bot_reply})
         chat_histories[mode][chat_id] = trim_chat_history(history)
-
         await update.message.reply_text(bot_reply, reply_markup=build_keyboard())
     except OpenAIError as e:
         logging.error(f"OpenAI ошибка: {e}")

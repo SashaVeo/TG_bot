@@ -87,8 +87,6 @@ async def ensure_ffmpeg():
         if os.path.exists(archive_path):
             os.remove(archive_path)
 
-# === Остальная часть кода (без изменений) ===
-# ... (вставьте сюда остальную часть кода из предыдущих сообщений, она не менялась)
 # === Истории чатов и клавиатура ===
 chat_histories = { "default": {}, "psychologist": {}, "astrologer": {} }
 MAX_HISTORY_PAIRS = 10
@@ -198,21 +196,31 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.error(f"Ошибка генерации изображения: {e}")
             await update.message.reply_text("Не удалось создать изображение.")
         return
+        
     history = get_chat_history(chat_id, mode)
     history.append({"role": "user", "content": text})
+    
+    # Обновленные системные инструкции для использования HTML
     system_prompts = {
-        "default": "Ты — дружелюбный и полезный ассистент.",
-        "psychologist": "Ты — эмпатичный и профессиональный психолог.",
-        "astrologer": "Ты — опытный астролог."
+        "default": "Ты — дружелюбный и полезный ассистент. Используй HTML-теги для форматирования: <b> для жирного текста, <i> для курсива, <code> для кода.",
+        "psychologist": "Ты — эмпатичный и профессиональный психолог. Используй HTML-теги для форматирования, если это уместно: <b> для акцентов, <i> для мягких выделений.",
+        "astrologer": "Ты — опытный астролог. Используй HTML-теги для форматирования: <b> для важных терминов, <i> для цитат или названий."
     }
     system_prompt = system_prompts.get(mode, system_prompts["default"])
     messages = [{"role": "system", "content": system_prompt}] + trim_chat_history(history)
+    
     try:
         await update.message.chat.send_action(action=ChatAction.TYPING)
         response = client.chat.completions.create(model="gpt-4o", messages=messages, temperature=0.7, max_tokens=1500)
         bot_reply = response.choices[0].message.content
         history.append({"role": "assistant", "content": bot_reply})
-        await update.message.reply_text(bot_reply, reply_markup=build_keyboard())
+        
+        # Отправка ответа с включенным режимом HTML
+        await update.message.reply_text(
+            bot_reply,
+            parse_mode='HTML',
+            reply_markup=build_keyboard()
+        )
     except Exception as e:
         logger.error(f"Ошибка ответа OpenAI: {e}")
         await update.message.reply_text("Произошла ошибка.")

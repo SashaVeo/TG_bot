@@ -1,7 +1,5 @@
 import logging
 import os
-import tempfile
-import urllib.request
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
@@ -10,26 +8,18 @@ from telegram.ext import (
 import openai
 from openai import OpenAIError
 
-# === Переменные окружения ===
+# === Ключи API ===
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-
-if not TELEGRAM_BOT_TOKEN or not OPENAI_API_KEY:
-    raise EnvironmentError("Не установлены TELEGRAM_BOT_TOKEN или OPENAI_API_KEY")
-
 openai.api_key = OPENAI_API_KEY
 
 # === Логгирование ===
 logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    format="%(asctime)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 
-# === URL бинарников ===
-FFMPEG_URL = "https://github.com/SashaVeo/TG_bot/releases/download/v1.0/ffmpeg"
-FFPROBE_URL = "https://github.com/SashaVeo/TG_bot/releases/download/v1.0/ffprobe"
-
-# === Истории чатов ===
+# === Истории ===
 chat_histories = {
     "default": {},
     "psychologist": {},
@@ -38,113 +28,111 @@ chat_histories = {
 MAX_HISTORY_PAIRS = 10
 
 def get_chat_history(chat_id, mode):
-    return chat_histories.get(mode, {}).setdefault(chat_id, [])
+    return chat_histories.setdefault(mode, {}).setdefault(chat_id, [])
 
 def trim_chat_history(history):
-    return history[-(MAX_HISTORY_PAIRS * 2):] if len(history) > MAX_HISTORY_PAIRS * 2 else history
+    return history[-(MAX_HISTORY_PAIRS * 2):]
 
-def build_keyboard():
-    keyboard = [
-        [KeyboardButton("🌍 Изображение")],
-        [KeyboardButton("💬 Психолог")],
-        [KeyboardButton("🔮 Астролог")],
-        [KeyboardButton("↩ Назад")]
-    ]
-    return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+def build_keyboard(mode="default"):
+    if mode == "default":
+        return ReplyKeyboardMarkup([
+            [KeyboardButton("🌍 Изображение")],
+            [KeyboardButton("💬 Психолог")],
+            [KeyboardButton("🔮 Астролог")]
+        ], resize_keyboard=True)
+    else:
+        return ReplyKeyboardMarkup([[KeyboardButton("⬅️ Назад")]], resize_keyboard=True)
 
 # === Команды ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data["mode"] = "default"
     await update.message.reply_text(
         "😊 Привет! Я бот с GPT-4o. Выбери действие:",
         reply_markup=build_keyboard()
     )
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text("Выбери действие из меню.", reply_markup=build_keyboard())
+    await update.message.reply_text("Напиши вопрос или выбери действие из меню.", reply_markup=build_keyboard())
 
-# === Обработчик сообщений ===
+# === Основной обработчик ===
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     text = update.message.text.strip()
+    mode = context.user_data.get("mode", "default")
 
-    # Переход в режимы
+    # Кнопки переключения
     if text == "🌍 Изображение":
         context.user_data["mode"] = "image"
-        await update.message.reply_text("🖋 Напиши описание изображения, которое хочешь создать:")
+        await update.message.reply_text("🖋 Напиши описание изображения, которое хочешь создать:", reply_markup=build_keyboard("image"))
         return
-
     if text == "💬 Психолог":
         context.user_data["mode"] = "psychologist"
-        await update.message.reply_text("🧠 Психолог слушает тебя. Расскажи, что тревожит.")
+        await update.message.reply_text("🧠 Я слушаю. Расскажи, что тревожит.", reply_markup=build_keyboard("psychologist"))
         return
-
     if text == "🔮 Астролог":
         context.user_data["mode"] = "astrologer"
-        await update.message.reply_text("🔮 Я астролог. Введи дату рождения, время и город.")
+        await update.message.reply_text("🔮 Введи дату рождения, время и город. Я рассчитаю рекомендации.", reply_markup=build_keyboard("astrologer"))
         return
-
-    if text == "↩ Назад":
+    if text == "⬅️ Назад":
         context.user_data["mode"] = "default"
-        await update.message.reply_text("🔙 Возвращаюсь в главное меню.", reply_markup=build_keyboard())
+        await update.message.reply_text("Выбери действие:", reply_markup=build_keyboard("default"))
         return
 
-    # Режим генерации изображения
-    if context.user_data.get("mode") == "image":
+    # === Генерация изображения ===
+    if mode == "image":
         context.user_data["mode"] = "default"
         await update.message.reply_text("🎨 Генерирую изображение...")
         try:
-            image_response = openai.images.generate(
+            response = openai.images.generate(
                 prompt=text,
                 model="dall-e-3",
                 n=1,
                 size="1024x1024"
             )
-            image_url = image_response.data[0].url
+            image_url = response.data[0].url
             await update.message.reply_photo(photo=image_url, reply_markup=build_keyboard())
         except OpenAIError as e:
-            logging.error(f"Ошибка OpenAI при генерации изображения: {e}")
-            await update.message.reply_text("Ошибка при генерации изображения.", reply_markup=build_keyboard())
+            logging.error(f"DALL·E Error: {e}")
+            await update.message.reply_text("Ошибка генерации изображения.", reply_markup=build_keyboard())
         return
 
-    # === Логика чата ===
-    mode = context.user_data.get("mode", "default")
+    # === GPT ответ ===
     history = get_chat_history(chat_id, mode)
     history.append({"role": "user", "content": text})
     history = trim_chat_history(history)
-    chat_histories[mode][chat_id] = history
 
-    system_prompt = {
+    system_prompts = {
         "default": "Ты умный помощник. Отвечай подробно и понятно.",
-        "psychologist": "Ты профессиональный психолог. Говори мягко, поддерживающе.",
-        "astrologer": "Ты экспертный астролог. Используй астрологические знания, советы и термины."
-    }.get(mode, "Ты умный помощник.")
+        "psychologist": "Ты профессиональный психолог. Говори мягко, поддерживающе, как лучший психотерапевт.",
+        "astrologer": "Ты экспертный астролог. Отвечай, как астролог-консультант. Применяй астрологические знания."
+    }
 
-    messages = [{"role": "system", "content": system_prompt}] + history
+    messages = [{"role": "system", "content": system_prompts[mode]}] + history
 
     try:
         response = openai.chat.completions.create(
             model="gpt-4o",
             messages=messages,
-            temperature=0.8,
+            temperature=0.7,
             max_tokens=1000
         )
-        bot_reply = response.choices[0].message.content
-        history.append({"role": "assistant", "content": bot_reply})
+        reply = response.choices[0].message.content
+        history.append({"role": "assistant", "content": reply})
         chat_histories[mode][chat_id] = trim_chat_history(history)
-        await update.message.reply_text(bot_reply, reply_markup=build_keyboard())
+        await update.message.reply_text(reply, reply_markup=build_keyboard(mode="default" if mode == "image" else mode))
     except OpenAIError as e:
-        logging.error(f"OpenAI ошибка: {e}")
-        await update.message.reply_text("Ошибка при получении ответа от GPT.")
+        logging.error(f"GPT Error: {e}")
+        await update.message.reply_text("Ошибка при обращении к GPT. Попробуй позже.", reply_markup=build_keyboard(mode))
 
 # === Запуск ===
 if __name__ == "__main__":
     print("🤖 Бот запускается...")
     defaults = Defaults(parse_mode=None)
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).defaults(defaults).build()
 
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).defaults(defaults).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    logging.info("Бот запущен и слушает события.")
+    logging.info("Бот запущен.")
     app.run_polling()

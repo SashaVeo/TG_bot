@@ -48,7 +48,6 @@ async def ensure_ffmpeg():
     """
     if os.path.isfile(FFMPEG_PATH):
         logger.info(f"✅ FFMPEG уже на месте: {FFMPEG_PATH}")
-        # Убедимся, что права на исполнение есть
         os.chmod(FFMPEG_PATH, 0o755)
         return
 
@@ -56,7 +55,6 @@ async def ensure_ffmpeg():
     os.makedirs(BIN_DIR, exist_ok=True)
     archive_path = os.path.join(BIN_DIR, "ffmpeg.tar.xz")
 
-    # 1. Скачивание архива
     try:
         async with aiohttp.ClientSession() as session:
             async with session.get(FFMPEG_STATIC_URL) as resp:
@@ -67,14 +65,11 @@ async def ensure_ffmpeg():
                     f.write(await resp.read())
         logger.info("📦 Архив FFMPEG успешно скачан.")
 
-        # 2. Распаковка архива
         logger.info("Распаковываю архив FFMPEG...")
         with tarfile.open(archive_path, "r:xz") as tar:
-            # Ищем сам файл ffmpeg внутри архива
             for member in tar.getmembers():
                 if member.name.endswith('/ffmpeg'):
-                    # Извлекаем только один файл ffmpeg
-                    member.name = os.path.basename(member.name) # убираем путь папки
+                    member.name = os.path.basename(member.name)
                     tar.extract(member, path=BIN_DIR)
                     logger.info(f"Распакован {member.name} в {BIN_DIR}")
                     break
@@ -82,7 +77,6 @@ async def ensure_ffmpeg():
         if not os.path.isfile(FFMPEG_PATH):
             raise RuntimeError("ffmpeg не найден в распакованном архиве")
 
-        # 3. Установка прав на исполнение
         os.chmod(FFMPEG_PATH, 0o755)
         logger.info(f"✅ FFMPEG готов к использованию: {FFMPEG_PATH}")
 
@@ -90,11 +84,11 @@ async def ensure_ffmpeg():
         logger.error(f"Произошла ошибка при установке FFMPEG: {e}")
         raise
     finally:
-        # 4. Очистка (удаление архива)
         if os.path.exists(archive_path):
             os.remove(archive_path)
 
-
+# === Остальная часть кода (без изменений) ===
+# ... (вставьте сюда остальную часть кода из предыдущих сообщений, она не менялась)
 # === Истории чатов и клавиатура ===
 chat_histories = { "default": {}, "psychologist": {}, "astrologer": {} }
 MAX_HISTORY_PAIRS = 10

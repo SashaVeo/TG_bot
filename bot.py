@@ -64,7 +64,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     mode = context.user_data.get("mode", "default")
 
-    if text == "🌍 Сделать изображение":
+    if text == "🌍 Изображение":
         context.user_data["mode"] = "image"
         await update.message.reply_text("🖋 Напиши описание изображения, которое хочешь создать:")
         return

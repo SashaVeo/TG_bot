@@ -20,8 +20,8 @@ openai.api_key = OPENAI_API_KEY
 def download_ffmpeg_binaries():
     os.makedirs("bin", exist_ok=True)
     BINARIES = {
-        "ffmpeg": "https://github.com/SashaVeo/TG_bot/releases/download/v1.0.0/ffmpeg",
-        "ffprobe": "https://github.com/SashaVeo/TG_bot/releases/download/v1.0.0/ffprobe"
+        "FFMPEG_URL" = "https://github.com/SashaVeo/TG_bot/releases/download/v1.0/ffmpeg"
+        "FFPROBE_URL" = "https://github.com/SashaVeo/TG_bot/releases/download/v1.0/ffprobe"
     }
     for name, url in BINARIES.items():
         path = os.path.join("bin", name)

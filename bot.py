@@ -148,11 +148,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 if __name__ == "__main__":
     print("🤖 Бот запускается...")
     defaults = Defaults(parse_mode=None)
-    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).defaults(defaults).build()
+    application = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).defaults(defaults).build()
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    application.add_handler(MessageHandler(filters.VOICE, handle_voice))  # если есть
 
-    logging.info("Бот запущен и слушает события.")
-    app.run_polling()
+    application.run_polling()

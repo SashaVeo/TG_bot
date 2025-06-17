@@ -1,18 +1,19 @@
 import logging
 import os
 import tempfile
-from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
+import openai
+import aiohttp
+from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, Audio
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
     ContextTypes, filters, Defaults
 )
-import openai
 from openai import OpenAIError
-from pydub import AudioSegment
 
 # === Переменные окружения ===
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+FFMPEG_PATH = os.getenv("FFMPEG_PATH", default="bin/ffmpeg")
 
 if not TELEGRAM_BOT_TOKEN or not OPENAI_API_KEY:
     raise EnvironmentError("Не установлены TELEGRAM_BOT_TOKEN или OPENAI_API_KEY")
@@ -33,51 +34,28 @@ chat_histories = {
 }
 MAX_HISTORY_PAIRS = 10
 
+# === Хелперы ===
 def get_chat_history(chat_id, mode):
-    history_store = chat_histories.get(mode, {})
-    return history_store.setdefault(chat_id, [])
+    return chat_histories.get(mode, {}).setdefault(chat_id, [])
 
 def trim_chat_history(history):
     return history[-(MAX_HISTORY_PAIRS * 2):] if len(history) > MAX_HISTORY_PAIRS * 2 else history
 
 def build_keyboard():
     keyboard = [
-        [KeyboardButton("🌍 Изображение"), KeyboardButton("🔙 Назад")],
-        [KeyboardButton("💬 Психолог"), KeyboardButton("🔮 Астролог")]
+        [KeyboardButton("🌍 Изображение")],
+        [KeyboardButton("💬 Психолог")],
+        [KeyboardButton("🔮 Астролог")],
+        [KeyboardButton("⬅️ Назад")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
 # === Команды ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "😊 Привет! Я бот с GPT-4o. Выбери действие:",
-        reply_markup=build_keyboard()
-    )
+    await update.message.reply_text("😊 Привет! Я бот с GPT-4o. Выбери действие:", reply_markup=build_keyboard())
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("Выбери действие из меню.", reply_markup=build_keyboard())
-
-# === Обработчик голосовых сообщений ===
-async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    file = await update.message.voice.get_file()
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".ogg") as f:
-        ogg_path = f.name
-        await file.download_to_drive(ogg_path)
-
-    mp3_path = ogg_path.replace(".ogg", ".mp3")
-    audio = AudioSegment.from_file(ogg_path)
-    audio.export(mp3_path, format="mp3")
-
-    try:
-        with open(mp3_path, "rb") as audio_file:
-            transcript = openai.Audio.transcribe("whisper-1", audio_file)
-            text = transcript["text"]
-            await update.message.reply_text(f"🔊 Распознано:\n{text}")
-            update.message.text = text
-            await handle_message(update, context)
-    except Exception as e:
-        logging.error(f"Ошибка при распознавании аудио: {e}")
-        await update.message.reply_text("❌ Не удалось распознать голосовое сообщение.")
 
 # === Обработчик сообщений ===
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -85,7 +63,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
 
-    mode = context.user_data.get("mode", "default")
+    if text == "⬅️ Назад":
+        context.user_data["mode"] = "default"
+        await update.message.reply_text("↩️ Возвращаемся в главное меню", reply_markup=build_keyboard())
+        return
 
     if text == "🌍 Изображение":
         context.user_data["mode"] = "image"
@@ -102,12 +83,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("🔮 Я астролог. Введи дату рождения, время и город.")
         return
 
-    if text == "🔙 Назад":
-        context.user_data["mode"] = "default"
-        await update.message.reply_text("🔁 Возврат в главное меню.", reply_markup=build_keyboard())
-        return
+    mode = context.user_data.get("mode", "default")
 
-    if context.user_data.get("mode") == "image":
+    if mode == "image":
         context.user_data["mode"] = "default"
         await update.message.reply_text("🎨 Генерирую изображение...")
         try:
@@ -121,19 +99,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_photo(photo=image_url)
         except OpenAIError as e:
             logging.error(f"Ошибка OpenAI при генерации изображения: {e}")
-            await update.message.reply_text("Ошибка при генерации изображения.")
+            await update.message.reply_text("Произошла ошибка при генерации изображения.")
         return
 
-    history_mode = context.user_data.get("mode", "default")
-    history = get_chat_history(chat_id, history_mode)
+    history = get_chat_history(chat_id, mode)
     history.append({"role": "user", "content": text})
     history = trim_chat_history(history)
 
     system_prompt = {
         "default": "Ты умный помощник. Отвечай подробно и понятно.",
         "psychologist": "Ты профессиональный психолог. Говори мягко, поддерживающе.",
-        "astrologer": "Ты экспертный астролог. Используй астрологические знания, советы и термины."
-    }.get(history_mode, "Ты умный помощник.")
+        "astrologer": "Ты экспертный астролог. Используй астрологические знания и термины."
+    }.get(mode, "Ты умный помощник.")
 
     messages = [{"role": "system", "content": system_prompt}] + history
 
@@ -146,12 +123,42 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         bot_reply = response.choices[0].message.content
         history.append({"role": "assistant", "content": bot_reply})
-        chat_histories[history_mode][chat_id] = trim_chat_history(history)
-
+        chat_histories[mode][chat_id] = trim_chat_history(history)
         await update.message.reply_text(bot_reply, reply_markup=build_keyboard())
     except OpenAIError as e:
         logging.error(f"OpenAI ошибка: {e}")
         await update.message.reply_text("Ошибка при получении ответа от GPT.")
+
+# === Обработка голосовых сообщений ===
+async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    voice: Audio = update.message.voice or update.message.audio
+    file = await context.bot.get_file(voice.file_id)
+    ogg_path = tempfile.NamedTemporaryFile(delete=False, suffix=".ogg").name
+    mp3_path = ogg_path.replace(".ogg", ".mp3")
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(file.file_path) as resp:
+                with open(ogg_path, 'wb') as f:
+                    f.write(await resp.read())
+
+        os.system(f"chmod +x {FFMPEG_PATH} && {FFMPEG_PATH} -i {ogg_path} {mp3_path} -y")
+
+        with open(mp3_path, 'rb') as mp3:
+            transcript = openai.audio.transcriptions.create(
+                model="whisper-1",
+                file=mp3
+            )
+            update.message.text = transcript.text
+            await handle_message(update, context)
+
+    except Exception as e:
+        logging.error(f"Ошибка при обработке аудио: {e}")
+        await update.message.reply_text("Произошла ошибка при обработке голосового сообщения.")
+    finally:
+        for f in (ogg_path, mp3_path):
+            if os.path.exists(f):
+                os.remove(f)
 
 # === Запуск ===
 if __name__ == "__main__":
@@ -161,8 +168,8 @@ if __name__ == "__main__":
 
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("help", help_command))
-    app.add_handler(MessageHandler(filters.VOICE, handle_voice))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, handle_voice))
 
     logging.info("Бот запущен и слушает события.")
     app.run_polling()

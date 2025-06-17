@@ -1,13 +1,15 @@
 import logging
 import os
 import subprocess
-from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
-from telegram.ext import (
-    ApplicationBuilder, CommandHandler, MessageHandler,
-    ContextTypes, filters, Defaults
-)
-import openai
-from openai import OpenAIError
+from telegram.ext import ApplicationBuilder, CommandHandler
+
+async def start(update, context):
+    await update.message.reply_text("Привет!")
+
+if __name__ == "__main__":
+    app = ApplicationBuilder().token(TELEGRAM_BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.run_polling()
 
 # === Переменные окружения ===
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")

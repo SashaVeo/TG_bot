@@ -68,7 +68,7 @@ async def ensure_ffmpeg():
         logger.info("📦 Архив FFMPEG успешно скачан.")
 
         # 2. Распаковка архива
-        logger.info(" unpacking FFMPEG archive...")
+        logger.info("Распаковываю архив FFMPEG...")
         with tarfile.open(archive_path, "r:xz") as tar:
             # Ищем сам файл ffmpeg внутри архива
             for member in tar.getmembers():
@@ -80,7 +80,7 @@ async def ensure_ffmpeg():
                     break
         
         if not os.path.isfile(FFMPEG_PATH):
-            raise RuntimeError("ffmpeg not found in extracted archive")
+            raise RuntimeError("ffmpeg не найден в распакованном архиве")
 
         # 3. Установка прав на исполнение
         os.chmod(FFMPEG_PATH, 0o755)
@@ -95,7 +95,7 @@ async def ensure_ffmpeg():
             os.remove(archive_path)
 
 
-# === Истории чатов и клавиатура (без изменений) ===
+# === Истории чатов и клавиатура ===
 chat_histories = { "default": {}, "psychologist": {}, "astrologer": {} }
 MAX_HISTORY_PAIRS = 10
 
@@ -115,7 +115,7 @@ def build_keyboard():
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-# === Обработчики команд и сообщений (без изменений) ===
+# === Обработчики команд и сообщений ===
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "😊 Привет! Я многофункциональный бот с GPT-4o.\n\n"
@@ -165,14 +165,14 @@ async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_message(update, context)
 
     except Exception as e:
-        await update.message.reply_text("❌ Произошла ошибка при обработке аудио.")
         logger.error(f"Ошибка в handle_voice: {e}")
+        await update.message.reply_text("❌ Произошла ошибка при обработке аудио.")
+        
     finally:
         if ogg_path and os.path.exists(ogg_path): os.remove(ogg_path)
         if mp3_path and os.path.exists(mp3_path): os.remove(mp3_path)
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # Эта функция остается без изменений
     chat_id = update.effective_chat.id
     text = update.message.text.strip()
     mode = context.user_data.get("mode", "default")
@@ -223,7 +223,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Ошибка ответа OpenAI: {e}")
         await update.message.reply_text("Произошла ошибка.")
 
-# === Запуск бота (без изменений) ===
+# === Запуск бота ===
 async def main() -> None:
     # При запуске сначала убедимся, что ffmpeg на месте
     await ensure_ffmpeg()

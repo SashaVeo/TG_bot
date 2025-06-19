@@ -4,8 +4,9 @@ import asyncio
 import aiohttp
 import subprocess
 import tarfile
+import requests # <-- ДОБАВЛЕНО: для работы с API RunwayML
 
-from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
+from telegram import Update, KeyboardButton, ReplyKeyboardMarkup, InputFile
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -19,9 +20,11 @@ import openai
 # === Переменные окружения ===
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+# --- ДОБАВЛЕНО: API ключ RunwayML ---
+RUNWAYML_API_KEY = os.getenv("RUNWAYML_API_KEY") # Предполагаем, что ключ будет в переменной окружения
 
-if not TELEGRAM_BOT_TOKEN or not OPENAI_API_KEY:
-    raise EnvironmentError("Не установлены переменные окружения TELEGRAM_BOT_TOKEN или OPENAI_API_KEY")
+if not TELEGRAM_BOT_TOKEN or not OPENAI_API_KEY or not RUNWAYML_API_KEY: # <-- ИЗМЕНЕНО: добавлена проверка RUNWAYML_API_KEY
+    raise EnvironmentError("Не установлены необходимые переменные окружения: TELEGRAM_BOT_TOKEN, OPENAI_API_KEY или RUNWAYML_API_KEY")
 
 # === Инициализация клиента OpenAI ===
 client = openai.OpenAI(api_key=OPENAI_API_KEY)
@@ -31,6 +34,10 @@ FFMPEG_STATIC_URL = "https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-am
 BIN_DIR = "./bin"
 FFMPEG_PATH = os.path.join(BIN_DIR, "ffmpeg")
 
+# --- ДОБАВЛЕНО: URL и настройки для RunwayML ---
+# Важно: Сверься с официальной документацией RunwayML для Gen-4, чтобы убедиться в актуальности URL и структуры payload.
+RUNWAYML_API_GENERATE_URL = "https://api.runwayml.com/v1/generate"
+MAX_PROMPT_LENGTH_RUNWAY = 1300 # Максимальная длина промпта для RunwayML Gen-4
 
 # === Логгирование ===
 logging.basicConfig(
@@ -38,7 +45,6 @@ logging.basicConfig(
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
-
 
 async def ensure_ffmpeg():
     # ... (код этой функции не менялся)
@@ -76,10 +82,13 @@ async def ensure_ffmpeg():
             os.remove(archive_path)
 
 # === Истории чатов ===
-chat_histories = { "default": {}, "psychologist": {}, "astrologer": {} }
+chat_histories = { "default": {}, "psychologist": {}, "astrologer": {} } # <-- ИЗМЕНЕНО: "default" используется как база
 MAX_HISTORY_PAIRS = 10
 
 def get_chat_history(chat_id, mode):
+    # Если режим не имеет своей собственной истории, используем default
+    if mode not in chat_histories:
+        return chat_histories["default"].setdefault(chat_id, [])
     return chat_histories.get(mode, {}).setdefault(chat_id, [])
 
 def trim_chat_history(history):
@@ -88,11 +97,12 @@ def trim_chat_history(history):
     return history
 
 def build_keyboard():
-    # --- ИЗМЕНЕНИЕ: Добавлена кнопка "Помощница" и изменена раскладка ---
+    # --- ИЗМЕНЕНИЕ: Добавлена кнопка "Видеообложка" ---
     keyboard = [
         [KeyboardButton("📈 SEO"), KeyboardButton("🌍 Изображение")],
         [KeyboardButton("💁‍♀️ Помощница"), KeyboardButton("💬 Психолог")],
-        [KeyboardButton("🔮 Астролог"), KeyboardButton("🔙 Назад в главное меню")]
+        [KeyboardButton("🔮 Астролог"), KeyboardButton("🎬 Видеообложка")], # <-- ДОБАВЛЕНО
+        [KeyboardButton("🔙 Назад в главное меню")]
     ]
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -110,6 +120,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "📈 **SEO** - напишу текст для карточки товара по ключевым словам.\n"
         "💁‍♀️ **Помощница** - составлю вежливый ответ на отзыв клиента.\n"
         "🌍 **Изображение** - создам картинку по вашему текстовому описанию.\n"
+        "🎬 **Видеообложка** - сгенерирую 5-секундный видеоролик по описанию.\n" # <-- ДОБАВЛЕНО
         "💬 **Психолог** - выслушаю и поддержу.\n"
         "🔮 **Астролог** - дам совет.\n\n"
         "Я также умею расшифровывать голосовые сообщения!",
@@ -162,7 +173,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Отправьте мне список ключевых слов (например, через запятую), и я создам SEO-оптимизированное описание для карточки товара на Wildberries (1500-2000 символов)."
         )
         return
-    # --- ИЗМЕНЕНИЕ: Обработчик для кнопки "Помощница" ---
     if text == "💁‍♀️ Помощница":
         context.user_data["mode"] = "assistant"
         await update.message.reply_text(
@@ -181,10 +191,96 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         context.user_data["mode"] = "astrologer"
         await update.message.reply_text("✨ Задайте свой вопрос.")
         return
+    # --- ДОБАВЛЕНО: Обработчик для кнопки "Видеообложка" ---
+    if text == "🎬 Видеообложка":
+        context.user_data["mode"] = "video_cover"
+        await update.message.reply_text(
+            f"Отлично! Теперь пришлите мне текстовое описание для 5-секундной видеообложки (до {MAX_PROMPT_LENGTH_RUNWAY} символов).",
+            reply_markup=build_keyboard() # Можно оставить клавиатуру, чтобы пользователь мог вернуться
+        )
+        return
 
     # === Логика для каждого режима ===
-    # --- ИЗМЕНЕНИЕ: Логика для режима "Помощница" ---
+    if mode == "video_cover": # <-- ДОБАВЛЕНО: Логика для режима "Видеообложка"
+        user_prompt = text
+        context.user_data["mode"] = "default" # Возвращаем в дефолтный режим после получения промпта
+
+        if not user_prompt:
+            await update.message.reply_text("Пожалуйста, отправь мне текстовое описание для генерации видео.")
+            return
+
+        if len(user_prompt) > MAX_PROMPT_LENGTH_RUNWAY:
+            await update.message.reply_text(
+                f"Твой промпт слишком длинный. Максимальная длина - {MAX_PROMPT_LENGTH_RUNWAY} символов. "
+                "Пожалуйста, сократи его.",
+                reply_markup=build_keyboard()
+            )
+            return
+
+        await update.message.reply_text("Отлично! Я начинаю генерировать видеообложку. Это может занять некоторое время, пожалуйста, подожди...", reply_markup=build_keyboard())
+        await update.message.chat.send_action(action=ChatAction.UPLOAD_VIDEO) # Показываем, что бот загружает видео
+
+        try:
+            # Формируем данные для запроса к RunwayML API
+            payload = {
+                "prompt": user_prompt,
+                "duration": 5, # 5 секунд
+                "aspect_ratio": "3:4", # Соотношение сторон
+                # Здесь могут быть другие параметры, специфичные для Gen-4.
+                # Сверяйся с документацией RunwayML!
+            }
+            headers = {
+                "Authorization": f"Bearer {RUNWAYML_API_KEY}",
+                "Content-Type": "application/json"
+            }
+
+            logger.info(f"Отправка запроса в RunwayML с промптом: '{user_prompt}'")
+            response = requests.post(RUNWAYML_API_GENERATE_URL, json=payload, headers=headers)
+            response.raise_for_status()  # Выбросит исключение для ошибок HTTP (4xx или 5xx)
+
+            runway_data = response.json()
+            
+            # Предполагаем, что URL видео находится в поле 'video_url'
+            # Это может отличаться, проверь документацию RunwayML!
+            video_url = runway_data.get("video_url") 
+            
+            if not video_url:
+                logger.error(f"Не удалось получить URL видео из ответа RunwayML: {runway_data}")
+                await update.message.reply_text(
+                    "Произошла ошибка при генерации видеообложки. URL видео не найден в ответе.",
+                    reply_markup=build_keyboard()
+                )
+                return
+
+            logger.info(f"Видео сгенерировано. URL: {video_url}")
+
+            # Скачивание видео
+            video_response = requests.get(video_url, stream=True)
+            video_response.raise_for_status()
+
+            # Отправка видео пользователю
+            await update.message.reply_video(
+                video=InputFile(video_response.raw, filename="video_cover.mp4"),
+                caption="Вот твоя 5-секундная видеообложка от RunwayML Gen-4!",
+                reply_markup=build_keyboard()
+            )
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Ошибка запроса к RunwayML API: {e}")
+            await update.message.reply_text(
+                "Произошла ошибка при генерации видеообложки (проблема с соединением или API). Пожалуйста, попробуй еще раз позже.",
+                reply_markup=build_keyboard()
+            )
+        except Exception as e:
+            logger.error(f"Произошла непредвиденная ошибка при обработке видеообложки: {e}")
+            await update.message.reply_text(
+                "Произошла непредвиденная ошибка при генерации видеообложки. Пожалуйста, попробуй еще раз позже.",
+                reply_markup=build_keyboard()
+            )
+        return # Важно завершить обработку сообщения здесь
+
     if mode == "assistant":
+        # ... (код для assistant режима не менялся, но теперь помещен выше)
         context.user_data["mode"] = "default"
         customer_feedback = text
         await update.message.reply_text("✅ Готовлю ответ от имени менеджера...", reply_markup=build_keyboard())
@@ -264,7 +360,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Не удалось создать изображение.")
         return
 
-    # === Логика для режимов чата ===
+    # === Логика для режимов чата (должна быть в конце) ===
     history = get_chat_history(chat_id, mode)
     history.append({"role": "user", "content": text})
     system_prompts = {

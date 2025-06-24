@@ -4,6 +4,7 @@ import asyncio
 import aiohttp
 import subprocess
 import tarfile
+import telegram # Импортируем для обработки ошибок
 
 from telegram import Update, KeyboardButton, ReplyKeyboardMarkup
 from telegram.ext import (
@@ -88,7 +89,6 @@ def trim_chat_history(history):
     return history
 
 def build_keyboard():
-    # --- ИЗМЕНЕНИЕ: Добавлена кнопка "Олеся" и изменена раскладка ---
     keyboard = [
         [KeyboardButton("📈 SEO"), KeyboardButton("🌍 Изображение")],
         [KeyboardButton("💁‍♀️ Помощница"), KeyboardButton("🧘‍♀️ Олеся")],
@@ -170,7 +170,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "Пришлите мне отзыв или вопрос клиента для подготовки ответа."
         )
         return
-    # --- ИЗМЕНЕНИЕ: Обработчик для кнопки "Олеся" ---
     if text == "🧘‍♀️ Олеся":
         context.user_data["mode"] = "olesya"
         await update.message.reply_text(
@@ -191,7 +190,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # === Логика для каждого режима ===
-    # --- ИЗМЕНЕНИЕ: Логика для режима "Олеся" ---
     if mode == "olesya":
         context.user_data["mode"] = "default"
         post_topic = text
@@ -215,7 +213,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 model="gpt-4o", messages=messages, temperature=0.8, max_tokens=1500
             )
             post_text = response.choices[0].message.content.strip()
-            await update.message.reply_text(post_text, parse_mode='HTML')
+            
+            # --- ИЗМЕНЕНИЕ: Улучшенная отправка с обработкой ошибок ---
+            try:
+                # Пытаемся отправить с HTML форматированием
+                await update.message.reply_text(post_text, parse_mode='HTML')
+            except telegram.error.BadRequest as e:
+                # Если ошибка в разметке, отправляем как простой текст
+                if 'entities' in str(e):
+                    logger.warning(f"Ошибка парсинга HTML, отправляю текст без форматирования. Ошибка: {e}")
+                    await update.message.reply_text(post_text)
+                else:
+                    # Если другая ошибка, пробрасываем ее дальше
+                    raise e
+                    
         except Exception as e:
             logger.error(f"Ошибка при генерации поста от имени Олеси: {e}")
             await update.message.reply_text("❌ Произошла ошибка при генерации поста.")
@@ -231,7 +242,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             assistant_system_prompt = (
                 "Ты — Евгения Ланцова, менеджер по заботе о клиентах в компании 'Немецкий дом'. "
                 "Твоя задача — отвечать на отзывы и вопросы клиентов максимально вежливо, профессионально и понятно. "
-                "Твоя цель — решить проблему клиента, поблагодарить за отзыв и оставить положительное впечатление о компании. "
                 "В конце КАЖДОГО ответа, без каких-либо исключений, ты ОБЯЗАНА добавить следующую подпись на трех отдельных строках:\n"
                 "Ваш \"Немецкий дом\"\n"
                 "Менеджер заботы о клиентах\n"

@@ -42,7 +42,10 @@ logger = logging.getLogger(__name__)
 
 
 async def ensure_ffmpeg():
-    # ... (код этой функции не менялся)
+    """
+    Проверяет наличие ffmpeg. Если его нет, скачивает статический билд,
+    распаковывает и делает исполняемым.
+    """
     if os.path.isfile(FFMPEG_PATH):
         logger.info(f"✅ FFMPEG уже на месте: {FFMPEG_PATH}")
         os.chmod(FFMPEG_PATH, 0o755)
@@ -120,7 +123,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # === Обработчики сообщений ===
 async def handle_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # ... (код этой функции не менялся)
     ogg_path = None
     mp3_path = None
     try:
@@ -214,17 +216,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             post_text = response.choices[0].message.content.strip()
             
-            # --- ИЗМЕНЕНИЕ: Улучшенная отправка с обработкой ошибок ---
+            # Улучшенная отправка с обработкой ошибок
             try:
-                # Пытаемся отправить с HTML форматированием
-                await update.message.reply_text(post_text, parse_mode='HTML')
+                await update.message.reply_text(post_text, parse_mode='HTML', reply_markup=build_keyboard())
             except telegram.error.BadRequest as e:
-                # Если ошибка в разметке, отправляем как простой текст
                 if 'entities' in str(e):
                     logger.warning(f"Ошибка парсинга HTML, отправляю текст без форматирования. Ошибка: {e}")
-                    await update.message.reply_text(post_text)
+                    await update.message.reply_text(post_text, reply_markup=build_keyboard())
                 else:
-                    # Если другая ошибка, пробрасываем ее дальше
                     raise e
                     
         except Exception as e:
@@ -233,7 +232,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if mode == "assistant":
-        # ... (код для этого режима не менялся)
         context.user_data["mode"] = "default"
         customer_feedback = text
         await update.message.reply_text("✅ Готовлю ответ от имени менеджера...", reply_markup=build_keyboard())
@@ -266,7 +264,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if mode == "seo":
-        # ... (код для этого режима не менялся)
         context.user_data["mode"] = "default"
         keywords = text
         await update.message.reply_text("✅ Принял. Генерирую SEO-текст...", reply_markup=build_keyboard())
@@ -299,7 +296,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if mode == "image":
-        # ... (код для этого режима не менялся)
         context.user_data["mode"] = "default"
         await update.message.reply_text("🎨 Создаю изображение...", reply_markup=build_keyboard())
         await update.message.chat.send_action(action=ChatAction.UPLOAD_PHOTO)
